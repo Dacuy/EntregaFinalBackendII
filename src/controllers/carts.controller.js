@@ -2,12 +2,29 @@ import { cartsService, productsService, ticketService, userService } from "../se
 import mongoose from 'mongoose';
 import AuthService from "../services/AuthService.js";
 import { v4 as uuidv4 } from 'uuid';
-import MailingService from '../services/MailingServices.js'
+import MailingService from '../services/MailingServices.js';
 
+const verificarPropietarioCarrito = async (req, res, cartId) => {
+    const authService = new AuthService();
+    const token = req.headers.authorization.split(' ')[1];
+    const tokenData = await authService.verifyToken(token);
+
+    const carrito = await cartsService.getCartById(cartId);
+    if (!carrito) {
+        res.status(404).send('Carrito no encontrado');
+        return null; // Importante: devolver null si no se encuentra el carrito
+    }
+
+    if (tokenData.id !== carrito.userRelatedTo) {
+        res.status(403).send('No tienes permiso para modificar este carrito');
+        return null; // Importante: devolver null si no tiene permiso
+    }
+
+    return carrito;
+};
 
 const crearCarrito = async (req, res) => {
-
-    const authService = new AuthService()
+    const authService = new AuthService();
     if (!req.headers.authorization) {
         return res.status(401).send({status: 'error', error: 'Authorization header missing'});
     }
@@ -15,17 +32,16 @@ const crearCarrito = async (req, res) => {
     const token = req.headers.authorization.split(' ')[1];
     const tokenData = await authService.verifyToken(token);
     const { products = [] } = req.body;
-    const userRelatedTo = tokenData.id
-    console.log(userRelatedTo)
-    const cartOwnerHasOne = await cartsService.getCartByOwner(userRelatedTo)
+    const userRelatedTo = tokenData.id;
+    
+    const cartOwnerHasOne = await cartsService.getCartByOwner(userRelatedTo);
     try {
         if(!cartOwnerHasOne){
-            await cartsService.createCart({ products , userRelatedTo});
+            await cartsService.createCart({ products , userRelatedTo });
             res.status(201).send(products.length ? 'Carrito ha sido creado con productos' : 'Carrito ha sido creado vacío');
-        }else{
-            res.status(400).send({status: 'error', error: 'Ya tienes un carrito creado'})
+        } else {
+            res.status(400).send({status: 'error', error: 'Ya tienes un carrito creado'});
         }
-        
     } catch (error) {
         console.error(error);
         res.status(500).send('Error interno del servidor');
@@ -56,14 +72,12 @@ const subirProdAelCarrito = async (req, res) => {
         return res.status(400).send('ID de carrito o producto no es válido');
     }
     try {
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
+
         const producto = await productsService.getOneProduct(idProd);
         if (!producto) {
             return res.status(404).send('Producto no encontrado');
-        }
-
-        const carrito = await cartsService.getCartById(cartId);
-        if (!carrito) {
-            return res.status(404).send('Carrito no encontrado');
         }
 
         const productoEnCarrito = carrito.products.find(prod => prod.id.equals(idProd));
@@ -72,6 +86,7 @@ const subirProdAelCarrito = async (req, res) => {
         } else {
             carrito.products.push({ id: idProd, quantity: 1 });
         }
+
         await cartsService.updateCart(cartId, carrito);
         res.status(200).send('Producto agregado al carrito exitosamente');
     } catch (error) {
@@ -86,9 +101,12 @@ const borrarProductoDelCarrito = async (req, res) => {
         return res.status(400).send('ID de carrito o producto no es válido');
     }
     try {
-        const carrito = await cartsService.getCartById(cartId);
-        if (!carrito) {
-            return res.status(404).send('Carrito no encontrado');
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
+
+        // Verificar si carrito.products está definido
+        if (!Array.isArray(carrito.products)) {
+            return res.status(500).send('El carrito no contiene productos.');
         }
 
         carrito.products = carrito.products.filter(product => !product.id.equals(productId));
@@ -107,10 +125,8 @@ const actualizarCarrito = async (req, res) => {
         return res.status(400).send('ID de carrito no es válido');
     }
     try {
-        const carrito = await cartsService.getCartById(cartId);
-        if (!carrito) {
-            return res.status(404).send('Carrito no encontrado');
-        }
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
 
         carrito.products = products;
         await cartsService.updateCart(cartId, carrito);
@@ -128,10 +144,8 @@ const cantidadProducto = async (req, res) => {
         return res.status(400).send('ID de carrito o producto no es válido');
     }
     try {
-        const carrito = await cartsService.getCartById(cartId);
-        if (!carrito) {
-            return res.status(404).send('Carrito no encontrado');
-        }
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
 
         const productoEnCarrito = carrito.products.find(prod => prod.id.equals(productId));
         if (productoEnCarrito) {
@@ -153,6 +167,9 @@ const borrarCarritoCompleto = async (req, res) => {
         return res.status(400).send('ID de carrito no es válido');
     }
     try {
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
+
         await cartsService.deleteCart(cartId);
         res.send('Carrito eliminado con éxito');
     } catch (error) {
@@ -161,21 +178,18 @@ const borrarCarritoCompleto = async (req, res) => {
     }
 };
 
-
 const terminarDeComprar = async (req, res) => {
+    const { cid: cartId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(cartId)) {
+        return res.status(400).send('ID de carrito no es válido');
+    }
+
     try {
-        const { cid: cartId } = req.params;
+        const carrito = await verificarPropietarioCarrito(req, res, cartId);
+        if (!carrito) return;
 
-        if (!mongoose.Types.ObjectId.isValid(cartId)) {
-            return res.status(400).send('ID de carrito no es válido');
-        }
-
-        const cart = await cartsService.getCartById(cartId);
-        if (!cart) {
-            return res.status(404).send('Carrito no encontrado');
-        }
-
-        const productos = cart.products;
+        const productos = carrito.products;
         if (productos.length === 0) {
             return res.status(400).send('El carrito está vacío');
         }
@@ -184,7 +198,7 @@ const terminarDeComprar = async (req, res) => {
         const productosComprados = [];
         let totalCompra = 0;
 
-        const usuario = await userService.getUserById(cart.userRelatedTo);
+        const usuario = await userService.getUserById(carrito.userRelatedTo);
         const userEmail = usuario.email;
         const userFirstName = usuario.first_name;
         const userLastName = usuario.last_name;
@@ -236,8 +250,8 @@ const terminarDeComprar = async (req, res) => {
 
             const result = await ticketService.createTicket(newTicket);
 
-            cart.products = productosSinStock;
-            await cartsService.updateCart(cartId, cart);
+            carrito.products = productosSinStock;
+            await cartsService.updateCart(cartId, carrito);
 
             const mailingService = new MailingService();
             const mailResult = mailingService.sendMail({
@@ -386,13 +400,6 @@ const terminarDeComprar = async (req, res) => {
         res.status(500).json({ error: 'Error al finalizar la compra', details: error.message });
     }
 };
-
-
-        
-
-
-
-
 
 export default {
     crearCarrito,
