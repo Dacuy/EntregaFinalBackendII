@@ -12,12 +12,12 @@ const verificarPropietarioCarrito = async (req, res, cartId) => {
     const carrito = await cartsService.getCartById(cartId);
     if (!carrito) {
         res.status(404).send('Carrito no encontrado');
-        return null; // Importante: devolver null si no se encuentra el carrito
+        return null;
     }
 
     if (tokenData.id !== carrito.userRelatedTo) {
         res.status(403).send('No tienes permiso para modificar este carrito');
-        return null; // Importante: devolver null si no tiene permiso
+        return null;
     }
 
     return carrito;
@@ -104,7 +104,6 @@ const borrarProductoDelCarrito = async (req, res) => {
         const carrito = await verificarPropietarioCarrito(req, res, cartId);
         if (!carrito) return;
 
-        // Verificar si carrito.products está definido
         if (!Array.isArray(carrito.products)) {
             return res.status(500).send('El carrito no contiene productos.');
         }
